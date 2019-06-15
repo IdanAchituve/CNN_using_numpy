@@ -10,6 +10,8 @@ MAX_MOMENTUM = 0.9
 MOMENTUM_SCALE = 0.2
 EPSILON = 10 ** -8
 FILTER_SIZE = 3
+POL_WINDOW = 2
+
 
 class CNN:
 
@@ -33,7 +35,7 @@ class CNN:
 
         self.is_train = True
         self.activations = []  # activations of fully connected
-        self.activation_maps = []  # activations of fully connected
+        self.activation_maps = []  # activations maps for saving conv/pol output
         self.mask = []  # dropout mask
 
         # data structures for saving weights and gradients of filters
@@ -54,16 +56,17 @@ class CNN:
         batch_size = np.size(x, 0)
 
         out = x.copy()  # copy input
-        activation_maps = []
         # conv/pol layers:
-        for layer_num in range(len(self.operation) - 1):
+        for layer_num in range(len(self.operation)):
             self.activation_maps.append(out.copy())
             if self.operation[layer_num] == "conv":
-                layer_activation_maps = self.forward_conv_layer(out, batch_size, layer_num)
-                activation_maps.append(layer_activation_maps)
+                out = self.forward_conv_layer(out, layer_num)
+            if self.operation[layer_num] == "pol":
+                out = self.forward_pol_layer(out)
 
+        # flatten last conv/pool layer and transpose so each column is an image in the batch
+        out = out.reshape(batch_size, -1).transpose().copy()
         for layer_num in range(len(self.layers) - 1):
-
             # dropout in training time only
             success_prob = 1 - self.dropout[layer_num]  # 0.2 dropout is 0.2 success = ~0.8 should of neurons should not be zeroed out
             if self.is_train:
@@ -76,7 +79,7 @@ class CNN:
             self.activations.append(out.copy())
 
             # linear transformation
-            out = np.dot(self.weights[layer_num].transpose(), out)  # z = Wx
+            out = np.dot(self.weights[layer_num].transpose(), out)  # z = W.T*x
 
             # non linearity
             if self.activation_functions[layer_num] == "relu":
@@ -92,7 +95,7 @@ class CNN:
         return out.copy()
 
     #  forward part for convolution layer
-    def forward_conv_layer(self, x, batch_size, layer_num):
+    def forward_conv_layer(self, x, layer_num):
         # x shape: [#examples, #maps, height, width]
         side_size = np.size(x, 2)  # width or height size
         orig_side_size = side_size
@@ -124,8 +127,25 @@ class CNN:
 
         return activation_maps
 
+    #  forward part for convolution layer
+    def forward_pol_layer(self, x):
+        # x shape: [#examples, #maps, height, width]
+        side_size = np.size(x, 2)  # width or height size
+        num_filters = np.size(x, 1)  # width or height size
 
-    def backward(self, batched_data, net_out, labels):
+        # POL_WINDOW
+        # get current parameters
+        for row in range(0, side_size, POL_WINDOW):
+            for col in range(0, side_size, POL_WINDOW):
+                curr_patch = x[:, :, row:row + POL_WINDOW, col:col + POL_WINDOW]
+                # get infinity norm in each window - since I will do it after relu all numbers are not negative
+                out_act = np.apply_over_axes(np.amax, curr_patch, [2, 3]).reshape(-1, num_filters, 1)
+                new_map = out_act.copy() if row == 0 and col == 0 else np.concatenate((new_map, out_act.copy()), axis=2)
+        # reshape to (num_examples, num_filters, 16, 16) for example after 1st pooling
+        activation_maps = np.reshape(new_map, (-1, num_filters, int(side_size/POL_WINDOW), int(side_size/POL_WINDOW)))
+        return activation_maps
+
+    def backward(self, net_out, labels):
 
         # activations point derivative
         def dactivation_dz(layer, activation_val):

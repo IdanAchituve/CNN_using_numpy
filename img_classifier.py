@@ -170,11 +170,12 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
             labels_vec = np.eye(NUM_CLASSES)[labels]
 
             # forward
+            batched_data = np.arange(96).reshape(2, 3, 4, 4)
             out = model.forward(batched_data)
             loss = model.loss_function(batched_data, out, labels_vec)
 
             # compute gradients and make the optimizer step
-            model.backward(batched_data, out, labels_vec)
+            model.backward(out, labels_vec)
             model.step()
 
             cum_loss += loss  # sum losses on all examples
