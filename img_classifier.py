@@ -167,12 +167,12 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
             labels = Y_train[ind:ind + batch_size].copy() - 1
 
             # from labels to 1-hot
-            labels_vec = np.eye(NUM_CLASSES)[labels]
+            labels_vec = np.eye(NUM_CLASSES)[labels].transpose()
 
             # forward
             batched_data = np.arange(96).reshape(2, 3, 4, 4)
             out = model.forward(batched_data)
-            loss = model.loss_function(batched_data, out, labels_vec)
+            loss = model.loss_function(labels_vec)
 
             # compute gradients and make the optimizer step
             model.backward(out, labels_vec)
@@ -251,8 +251,8 @@ def test_model(model, nn_params, exp, X, Y, save_logs, dataset="val", best_accu=
         if dataset == "val":
             # from labels to 1-hot
             labels = Y[ind:ind + batch_size].copy() - 1
-            labels_vec = np.eye(NUM_CLASSES)[labels]
-            loss = model.loss_function(batched_data, out, labels_vec)
+            labels_vec = np.eye(NUM_CLASSES)[labels].transpose()
+            loss = model.loss_function(labels_vec)
 
             # calc loss and accuracy
             cum_loss += loss

@@ -12,7 +12,6 @@ EPSILON = 10 ** -8
 FILTER_SIZE = 3
 POL_WINDOW = 2
 
-
 class CNN:
 
     def __init__(self, nn_params):
@@ -36,18 +35,40 @@ class CNN:
         self.is_train = True
         self.activations = []  # activations of fully connected
         self.activation_maps = []  # activations maps for saving conv/pol output
+        self.input_as_matrix = []  # activations maps for saving conv/pol output in the compact form
         self.mask = []  # dropout mask
 
+        # data structures for saving parameters of convolution weights
+        self.filters = []
+        self.filters_grads = []
+        self.filters_accum_grads = []
+
+        # data structures for saving parameters of convolution biases
+        self.biases = []
+        self.biases_grads = []
+        self.biases_accum_grads = []
+
+        # data structures for saving parameters of FC layers
+        self.weights = []
+        self.grads = []
+        self.accum_grads = []
+
         # data structures for saving weights and gradients of filters
-        self.filters = [np.random.normal(INIT_MEAN, INIT_STD, (next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE)) for prev_layer, next_layer in zip(self.num_filters, self.num_filters[1:])]
-        self.biases = [np.random.normal(INIT_MEAN, INIT_STD, next_layer) for prev_layer, next_layer in zip(self.num_filters, self.num_filters[1:])]
-        self.filters_grads = [np.zeros((next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE)) for prev_layer, next_layer in zip(self.num_filters, self.num_filters[1:])]
-        self.biases_grads = [np.zeros(next_layer) for prev_layer, next_layer in zip(self.num_filters, self.num_filters[1:])]
+        for prev_layer, next_layer in zip(self.num_filters, self.num_filters[1:]):
+            self.filters += [np.random.normal(INIT_MEAN, INIT_STD, (next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE))]
+            self.filters_grads += [np.zeros((next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE))]
+            self.filters_accum_grads += [np.zeros((next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE))]
+
+            self.biases += [np.random.normal(INIT_MEAN, INIT_STD, next_layer)]
+            self.biases_grads += [np.zeros(next_layer)]
+            self.biases_accum_grads += [np.zeros(next_layer)]
 
         # data structures for saving weights and gradients of each FC layer
-        self.weights = [np.random.normal(INIT_MEAN, INIT_STD, (prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
-        self.grads = [np.zeros((prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
-        self.accum_grads = [np.zeros((prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
+        for prev_layer, next_layer in zip(self.layers, self.layers[1:]):
+            self.weights += [np.random.normal(INIT_MEAN, INIT_STD, (prev_layer + 1, next_layer))]
+            self.grads += [np.zeros((prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
+            self.accum_grads += [np.zeros((prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
+
         self.sec_accum_grads = [np.zeros((prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
         self.logits = 0  # diff between each value an max value on final layer
 
@@ -60,9 +81,10 @@ class CNN:
         for layer_num in range(len(self.operation)):
             self.activation_maps.append(out.copy())
             if self.operation[layer_num] == "conv":
-                out = self.forward_conv_layer(out, layer_num)
+                out, in_matrix = self.forward_conv_layer_fast(out, layer_num)
             if self.operation[layer_num] == "pol":
-                out = self.forward_pol_layer(out)
+                out, in_matrix = self.forward_pol_layer_fast(out)
+            self.input_as_matrix.append(in_matrix)  # for convolution save the matrix form and for pooling save special reshaped form
 
         # flatten last conv/pool layer and transpose so each column is an image in the batch
         out = out.reshape(batch_size, -1).transpose().copy()
@@ -145,6 +167,71 @@ class CNN:
         activation_maps = np.reshape(new_map, (-1, num_filters, int(side_size/POL_WINDOW), int(side_size/POL_WINDOW)))
         return activation_maps
 
+    #  forward part for convolution layer
+    def forward_conv_layer_fast(self, x, layer_num, stride=1):
+        # x shape: [#examples, #maps, height, width]
+        side_size = np.size(x, 2)  # width or height size
+        x_padded = x.copy()
+        # pad with 0's all around
+        while side_size % FILTER_SIZE != 0:
+            # pad the height and width dimensions only
+            x_padded = np.pad(x_padded, ((0, 0), (0, 0), (1, 1), (1, 1)), 'constant', constant_values=0)
+            side_size = np.size(x_padded, 2)  # width or height size
+
+        N, C, H, W = x_padded.shape  # [#examples, #maps, height, width]
+        w = self.filters[layer_num]  # parameters of current layer
+        b = self.biases[layer_num]  # bias term
+
+        out_height = int((H - FILTER_SIZE) / stride + 1)  # activation output height
+        out_width = int((W - FILTER_SIZE) / stride + 1)  # activation output width
+
+        # Get combinations of indices to pick to get N matrices, with C*3*3 rows (each column is a respective field)
+        i0 = np.repeat(np.arange(FILTER_SIZE), FILTER_SIZE)
+        i0 = np.tile(i0, C)
+        i1 = stride * np.repeat(np.arange(out_height), out_width)
+        j0 = np.tile(np.arange(FILTER_SIZE), FILTER_SIZE * C)
+        j1 = stride * np.tile(np.arange(out_width), out_height)
+        i = i0.reshape(-1, 1) + i1.reshape(1, -1)  # indices of the rows to take from x_padded
+        j = j0.reshape(-1, 1) + j1.reshape(1, -1)  # indices of the columns to take fro x_padded
+
+        # indices of the filter to take from x_padded it will broadcast to the same shape as i and j
+        k = np.repeat(np.arange(C), FILTER_SIZE * FILTER_SIZE).reshape(-1, 1)
+
+        # for each image, take all tuples that correspond in the location (i.e., has the same location) in matrices i, j, k.
+        # basically pick 1 item at a time according to the exact SAME location in each of the matrices i,j,k
+        x_cols = x_padded[:, k, i, j]
+        C = x.shape[1]
+
+        # affine transformation
+        out = np.dot(w.reshape(-1, FILTER_SIZE * FILTER_SIZE * C), x_cols) + b.reshape(-1, 1, 1)
+
+        # rearrange to the agreed order: (examples, filters, height, width)
+        out = out.transpose(1, 0, 2).reshape(N, w.shape[0], out_height, out_width)
+        out_act = np.maximum(out, 0)  # not the best practice but apply relu here
+
+        #
+        # reshape to (# of respective fields, # of cols in each matrix in cols, # of examples) -
+        # put all corresponding respective fields of the examples in the batch in the same internal matrix (each example is a column)
+        # and then concatenate the respective fields of the examples
+        #x_cols = cols.transpose(1, 2, 0).reshape(FILTER_SIZE * FILTER_SIZE * C, -1)
+
+        # concatenate the weights
+        #res = w.reshape((w.shape[0], -1)).dot(x_cols) + b.reshape(-1, 1)
+
+        #out = res.reshape(w.shape[0], out.shape[2], out.shape[3], x.shape[0])
+        #out = out.transpose(3, 0, 1, 2)
+
+        return out_act, x_cols
+
+    #  forward part for convolution layer
+    def forward_pol_layer_fast(self, x):
+
+        N, C, H, W = x.shape
+        x_reshaped = x.reshape(N, C, int(H / POL_WINDOW), POL_WINDOW, int(W / POL_WINDOW), POL_WINDOW)
+        out = x_reshaped.max(axis=3).max(axis=4)
+
+        return out, x_reshaped
+
     def backward(self, net_out, labels):
 
         # activations point derivative
@@ -173,12 +260,24 @@ class CNN:
             dL_da[layer] = np.dot(delta, self.weights[layer][1:, :].transpose())  # dL/d(a_m-1) = w_m^T*(a_m - T)
             dL_da[layer] *= (self.mask[layer]).transpose()
 
+        # conv/pol layers:
+        C = self.num_filters[-1]
+        height = width = int(np.sqrt(dL_da[layer].shape[1] / C))
+        dL_da_conv = [0] * len(self.operation + 1)
+        dL_da_conv[-1] = dL_da[layer].reshape(batch_size, C, height, width)
+        for layer_num in range(len(self.operation) - 1, -1, -1):
+            prev_act = self.activation_maps[layer_num]
+            if self.operation[layer_num] == "conv":
+                out, in_matrix = self.forward_conv_layer_fast(out, layer_num)
+            if self.operation[layer_num] == "pol":
+                dL_da_conv[layer_num] = self.backward_pool(prev_act, dL_da_conv[layer_num + 1])
+
         # add regularization to gradient and average loss on batch
         for layer in range(len(self.layers) - 2, -1, -1):
             # average gradients
             self.grads[layer] = self.grads[layer] / batch_size
 
-            # in SGD the loss has L2 regularization
+            # in SGD the loss function has L2 regularization component which is equivalent to weight decay
             if self.optimizer == "SGD":
                 if self.reg_type == "L2":
                     dreg = self.weights[layer]
@@ -190,8 +289,11 @@ class CNN:
                 # add regularization
                 self.grads[layer] += self.reg*dreg
 
+    def backward_pool(self, x, dL_da):
+        xxx = 1
+
     # return the sum of losses per batch
-    def loss_function(self, batched_data, net_out, labels):
+    def loss_function(self, labels):
         sum_weights = 0.0
         if self.optimizer == "SGD":
             for l in range(len(self.layers) - 1):
@@ -230,12 +332,12 @@ class CNN:
                 self.weights[layer_num] = self.weights[layer_num] - self.momentum * prev_accum_grads + (1 + self.momentum) * self.accum_grads[layer_num]
 
             # ADAM optimizer with weight decay
-            else:
-                self.accum_grads[layer_num] = self.momentum * self.accum_grads[layer_num] + (1 - self.momentum) * self.grads[layer_num]
-                self.sec_accum_grads[layer_num] = self.second_moment * self.sec_accum_grads[layer_num] + (1 - self.second_moment) * (self.grads[layer_num] ** 2)
-                m_hat = self.accum_grads[layer_num] / (1 - (self.momentum ** self.update_counter))  # bias corrected first moment
-                v_hat = self.sec_accum_grads[layer_num] / (1 - (self.second_moment ** self.update_counter))  # bias corrected second moment
-                self.weights[layer_num] = self.weights[layer_num] - self.lr * m_hat / (np.sqrt(v_hat) + EPSILON) - self.reg * self.weights[layer_num]
+            #else:
+            #    self.accum_grads[layer_num] = self.momentum * self.accum_grads[layer_num] + (1 - self.momentum) * self.grads[layer_num]
+            #    self.sec_accum_grads[layer_num] = self.second_moment * self.sec_accum_grads[layer_num] + (1 - self.second_moment) * (self.grads[layer_num] ** 2)
+            #    m_hat = self.accum_grads[layer_num] / (1 - (self.momentum ** self.update_counter))  # bias corrected first moment
+            #    v_hat = self.sec_accum_grads[layer_num] / (1 - (self.second_moment ** self.update_counter))  # bias corrected second moment
+            #    self.weights[layer_num] = self.weights[layer_num] - self.lr * m_hat / (np.sqrt(v_hat) + EPSILON) - self.reg * self.weights[layer_num]
 
     def get_grads(self):
         return self.grads.copy()
