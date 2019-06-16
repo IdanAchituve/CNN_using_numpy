@@ -155,7 +155,6 @@ class CNN:
         side_size = np.size(x, 2)  # width or height size
         num_filters = np.size(x, 1)  # width or height size
 
-        # POL_WINDOW
         # get current parameters
         for row in range(0, side_size, POL_WINDOW):
             for col in range(0, side_size, POL_WINDOW):
@@ -263,14 +262,18 @@ class CNN:
         # conv/pol layers:
         C = self.num_filters[-1]
         height = width = int(np.sqrt(dL_da[layer].shape[1] / C))
-        dL_da_conv = [0] * len(self.operation + 1)
-        dL_da_conv[-1] = dL_da[layer].reshape(batch_size, C, height, width)
+        dL_da_conv = [0] * len(self.operation)
+        da = dL_da[layer].reshape(batch_size, C, height, width)
+        a = self.activations[0][1:].reshape(batch_size, C, height, width)
         for layer_num in range(len(self.operation) - 1, -1, -1):
             prev_act = self.activation_maps[layer_num]
             if self.operation[layer_num] == "conv":
-                out, in_matrix = self.forward_conv_layer_fast(out, layer_num)
+                xxx = 1
+                #pooling_delta = self.forward_conv_layer_fast(out, layer_num)
             if self.operation[layer_num] == "pol":
-                dL_da_conv[layer_num] = self.backward_pool(prev_act, dL_da_conv[layer_num + 1])
+                #dL_da_conv[layer_num] = self.backward_pool(prev_act, da)
+                prev_act_reshaped = self.input_as_matrix[layer_num]
+                dL_da_conv[layer_num] = self.backward_pool_fast(prev_act, prev_act_reshaped, da, a)
 
         # add regularization to gradient and average loss on batch
         for layer in range(len(self.layers) - 2, -1, -1):
@@ -290,7 +293,43 @@ class CNN:
                 self.grads[layer] += self.reg*dreg
 
     def backward_pool(self, x, dL_da):
-        xxx = 1
+
+        N, C, H, W = x.shape
+
+        # create a matrix with the same shape as the convolution that preceded it for saving the gradients
+        dx = np.zeros((N, C, H, W))
+
+        for n in range(N):
+            for c in range(C):
+                pol_row = 0
+                for row in range(0, H, POL_WINDOW):
+                    pol_col = 0
+                    for col in range(0, W, POL_WINDOW):
+                        # previous activation map
+                        curr_patch = x[n, c, row:row + POL_WINDOW, col:col + POL_WINDOW]
+                        # max location in each respective field
+                        max_loc_idx = np.unravel_index(np.argmax(curr_patch, axis=None), curr_patch.shape)
+                        # update value according to location
+                        delta = dL_da[n, c, pol_row, pol_col]
+                        dx[n, c, max_loc_idx[0] + row, max_loc_idx[1] + col] = delta
+                        pol_col += 1
+                    pol_row += 1
+
+        return dx
+
+
+    def backward_pool_fast(self, x, x_reshaped, dout, out):
+
+        dx_reshaped = np.zeros_like(x_reshaped)
+        out_newaxis = out[:, :, :, np.newaxis, :, np.newaxis]
+        mask = (x_reshaped == out_newaxis)
+        dout_newaxis = dout[:, :, :, np.newaxis, :, np.newaxis]
+        dout_broadcast, _ = np.broadcast_arrays(dout_newaxis, dx_reshaped)
+        dx_reshaped[mask] = dout_broadcast[mask]
+        dx_reshaped /= np.sum(mask, axis=(3, 5), keepdims=True)
+        dx = dx_reshaped.reshape(x.shape)
+
+        return dx
 
     # return the sum of losses per batch
     def loss_function(self, labels):
