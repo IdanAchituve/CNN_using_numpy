@@ -21,8 +21,10 @@ nn_params["epochs"] = 2
 nn_params["train_batch_size"] = 2
 nn_params["test_batch_size"] = 1
 #  always: stride = 1, filter size = 3x3, relu activation after conv layer, pooling window = 2x2, max pooling
-nn_params["operation"] = ["conv", "pol"]  # type of operation. Mandatory: Relu after conv layer and max pooling
-nn_params["conv_num_filters"] = [5]  # num of filters
+nn_params["operation"] = ["conv", "pol"]  # type of operation on layer. Mandatory: Relu after conv layer
+nn_params["conv_num_layers"] = [3, 5]  # number of feature maps in each layer
+nn_params["stride"] = [1, 2]  # pool/conv stride
+nn_params["filter_size"] = [3]  # filter size. only on convolution layers
 nn_params["layers"] = [20, 15, 10]  # FC dims - 1st dim is the flattening of the final conv/pol layers
 nn_params["activations"] = ['relu', 'softmax']  # FC activations on all but the 1st layer: tanh, relu or softmax
 nn_params["dropout"] = [0.0, 0.0]  # dropout on each layer

@@ -29,8 +29,12 @@ class CNN:
         self.dropout = nn_params["dropout"]  # a list of dropout probability per layer
         self.layers = nn_params["layers"]  # list of layers size
         self.activation_functions = nn_params["activations"]  # list of activation functions
+
+        # convolution parameters
         self.operation = nn_params["operation"]  # operation on feature map
-        self.num_filters = [3] + nn_params["conv_num_filters"]  # num of filters after each convolution
+        self.conv_layers = nn_params["conv_num_layers"]
+        self.stride = nn_params["stride"]
+        self.filter_size = nn_params["filter_size"]
 
         self.is_train = True
         self.activations = []  # activations of fully connected
@@ -53,17 +57,20 @@ class CNN:
         self.grads = []
         self.accum_grads = []
 
-        # data structures for saving weights and gradients of filters
-        for prev_layer, next_layer in zip(self.num_filters, self.num_filters[1:]):
-            self.filters += [np.random.normal(INIT_MEAN, INIT_STD, (next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE))]
-            self.filters_grads += [np.zeros((next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE))]
-            self.filters_accum_grads += [np.zeros((next_layer, prev_layer, FILTER_SIZE, FILTER_SIZE))]
+        # initialise data structures for saving weights and gradients of filters - no option for 2 subsequent pooling layers
+        idx = 0
+        for prev_layer, next_layer in zip(self.conv_layers, self.conv_layers[1:]):
+            filter_size = self.filter_size[idx]
+            self.filters += [np.random.normal(INIT_MEAN, INIT_STD, (next_layer, prev_layer, filter_size, filter_size))]
+            self.filters_grads += [np.zeros((next_layer, prev_layer, filter_size, filter_size))]
+            self.filters_accum_grads += [np.zeros((next_layer, prev_layer, filter_size, filter_size))]
 
             self.biases += [np.random.normal(INIT_MEAN, INIT_STD, next_layer)]
             self.biases_grads += [np.zeros(next_layer)]
             self.biases_accum_grads += [np.zeros(next_layer)]
+            idx += 1
 
-        # data structures for saving weights and gradients of each FC layer
+        # initialise data structures for saving weights and gradients of each FC layer
         for prev_layer, next_layer in zip(self.layers, self.layers[1:]):
             self.weights += [np.random.normal(INIT_MEAN, INIT_STD, (prev_layer + 1, next_layer))]
             self.grads += [np.zeros((prev_layer + 1, next_layer)) for prev_layer, next_layer in zip(self.layers, self.layers[1:])]
@@ -78,12 +85,12 @@ class CNN:
 
         out = x.copy()  # copy input
         # conv/pol layers:
-        for layer_num in range(len(self.operation)):
+        for layer_num in range(len(self.conv_layers)):
             self.activation_maps.append(out.copy())
             if self.operation[layer_num] == "conv":
                 out, in_matrix = self.forward_conv_layer_fast(out, layer_num)
             if self.operation[layer_num] == "pol":
-                out, in_matrix = self.forward_pol_layer_fast(out)
+                out, in_matrix = self.forward_pol_layer_fast(out, layer_num)
             self.input_as_matrix.append(in_matrix)  # for convolution save the matrix form and for pooling save special reshaped form
 
         # flatten last conv/pool layer and transpose so each column is an image in the batch
@@ -117,95 +124,110 @@ class CNN:
         return out.copy()
 
     #  forward part for convolution layer
-    def forward_conv_layer(self, x, layer_num):
+    def forward_conv_layer(self, ex, layer_num):
         # x shape: [#examples, #maps, height, width]
-        side_size = np.size(x, 2)  # width or height size
-        orig_side_size = side_size
+        x = ex.copy()
+        w = self.filters[layer_num]  # parameters of current layer
+        b = self.biases[layer_num]  # bias term
+
+        S = self.stride[layer_num]
+        F = np.size(w, 3)  # all filters are square so it's enough to take one dimension
+        C = np.size(w, 0)
+
+        W_orig = H_orig = np.size(x, 2)  # width and height size
+        P = 0
         # pad with 0's all around
-        while side_size % FILTER_SIZE != 0:
+        while ((W_orig + 2*P)/S) % F != 0:
             # pad the height and width dimensions only
             x = np.pad(x, ((0, 0), (0, 0), (1, 1), (1, 1)), 'constant', constant_values=0)
-            side_size = np.size(x, 2)  # width or height size
+            P += 1  # width or height size
 
-        # get current parameters
-        filters = self.filters[layer_num]  # parameters of current layer
-        biases = self.biases[layer_num]  # bias term
-        num_filters = np.size(filters, 0)
-        for filter_num in range(num_filters):
-            filter = filters[filter_num]
-            bias = biases[filter_num]
-            for row in range(orig_side_size):
-                for col in range(orig_side_size):
-                    curr_patch = x[:, :, row:row+FILTER_SIZE, col:col+FILTER_SIZE]
+        H_new = int((H_orig + 2*P - F)/S + 1)  # activation output height
+        W_new = int((W_orig + 2*P - F)/S + 1)  # activation output width
+
+        for filter_num in range(C):
+            filter = w[filter_num]
+            bias = b[filter_num]
+            for row in range(0, H_new, S):
+                for col in range(0, W_new, S):
+                    curr_patch = x[:, :, row:row+F, col:col+F]
                     # apply convolution operation
                     out_act = np.apply_over_axes(np.sum, np.multiply(curr_patch, np.expand_dims(filter, axis=0)), [1, 2, 3]) + bias
                     # activation and reshape to fill all values in a row
                     out_act = np.maximum(out_act, 0).reshape(-1, 1)
                     new_map = out_act.copy() if row == 0 and col == 0 else np.concatenate((new_map, out_act.copy()), axis=1)
             # reshape to (num_examples, 1, 32, 32) for example
-            activation_map = np.reshape(new_map, (-1, 1, orig_side_size, orig_side_size))
+            activation_map = np.reshape(new_map, (-1, 1, H_new, W_new))
             # save all activations in activation_maps and concatenate along the filter axis
-            activation_maps = activation_map.copy() if filter_num == 0 else np.concatenate((activation_maps, activation_map.copy()), axis=1)
+            out_act = activation_map.copy() if filter_num == 0 else np.concatenate((out_act, activation_map.copy()), axis=1)
 
-        return activation_maps
+        return out_act
 
     #  forward part for convolution layer
-    def forward_pol_layer(self, x):
+    def forward_pol_layer(self, ex, layer_num):
         # x shape: [#examples, #maps, height, width]
-        side_size = np.size(x, 2)  # width or height size
-        num_filters = np.size(x, 1)  # width or height size
+        x = ex.copy()
+
+        W = H = np.size(x, 2)  # width and height size
+        A = np.size(x, 1)  # number of activation maps
+        S = self.stride[layer_num]  # window size
 
         # get current parameters
-        for row in range(0, side_size, POL_WINDOW):
-            for col in range(0, side_size, POL_WINDOW):
-                curr_patch = x[:, :, row:row + POL_WINDOW, col:col + POL_WINDOW]
+        for row in range(0, H, S):
+            for col in range(0, W, S):
+                curr_patch = x[:, :, row:row + S, col:col + S]
                 # get infinity norm in each window - since I will do it after relu all numbers are not negative
-                out_act = np.apply_over_axes(np.amax, curr_patch, [2, 3]).reshape(-1, num_filters, 1)
+                out_act = np.apply_over_axes(np.amax, curr_patch, [2, 3]).reshape(-1, A, 1)
                 new_map = out_act.copy() if row == 0 and col == 0 else np.concatenate((new_map, out_act.copy()), axis=2)
         # reshape to (num_examples, num_filters, 16, 16) for example after 1st pooling
-        activation_maps = np.reshape(new_map, (-1, num_filters, int(side_size/POL_WINDOW), int(side_size/POL_WINDOW)))
-        return activation_maps
+        out = np.reshape(new_map, (-1, A, int(H/S), int(W/S)))
+        return out
 
     #  forward part for convolution layer
-    def forward_conv_layer_fast(self, x, layer_num, stride=1):
+    def forward_conv_layer_fast(self, ex, layer_num):
         # x shape: [#examples, #maps, height, width]
-        side_size = np.size(x, 2)  # width or height size
-        x_padded = x.copy()
-        # pad with 0's all around
-        while side_size % FILTER_SIZE != 0:
-            # pad the height and width dimensions only
-            x_padded = np.pad(x_padded, ((0, 0), (0, 0), (1, 1), (1, 1)), 'constant', constant_values=0)
-            side_size = np.size(x_padded, 2)  # width or height size
+        x_padded = ex.copy()
 
-        N, C, H, W = x_padded.shape  # [#examples, #maps, height, width]
         w = self.filters[layer_num]  # parameters of current layer
         b = self.biases[layer_num]  # bias term
 
-        out_height = int((H - FILTER_SIZE) / stride + 1)  # activation output height
-        out_width = int((W - FILTER_SIZE) / stride + 1)  # activation output width
+        S = self.stride[layer_num]
+        F = w.shape[3]  # all filters are square so it's enough to take one dimension
+
+        W_orig = H_orig = np.size(x_padded, 2)  # width and height size
+        P = 0
+        # pad with 0's all around
+        while ((W_orig + 2*P)/S) % F != 0:
+            # pad the height and width dimensions only
+            x_padded = np.pad(x_padded, ((0, 0), (0, 0), (1, 1), (1, 1)), 'constant', constant_values=0)
+            P += 1  # width or height size
+
+        H_new = int((H_orig + 2*P - F)/S + 1)  # activation output height
+        W_new = int((W_orig + 2*P - F)/S + 1)  # activation output width
+
+        N, C, H, W = x_padded.shape  # [#examples, #maps, height, width]
 
         # Get combinations of indices to pick to get N matrices, with C*3*3 rows (each column is a respective field)
-        i0 = np.repeat(np.arange(FILTER_SIZE), FILTER_SIZE)
+        i0 = np.repeat(np.arange(F), F)
         i0 = np.tile(i0, C)
-        i1 = stride * np.repeat(np.arange(out_height), out_width)
-        j0 = np.tile(np.arange(FILTER_SIZE), FILTER_SIZE * C)
-        j1 = stride * np.tile(np.arange(out_width), out_height)
+        i1 = S * np.repeat(np.arange(H_new), W_new)
+        j0 = np.tile(np.arange(F), F * C)
+        j1 = S * np.tile(np.arange(W_new), H_new)
         i = i0.reshape(-1, 1) + i1.reshape(1, -1)  # indices of the rows to take from x_padded
         j = j0.reshape(-1, 1) + j1.reshape(1, -1)  # indices of the columns to take fro x_padded
 
         # indices of the filter to take from x_padded it will broadcast to the same shape as i and j
-        k = np.repeat(np.arange(C), FILTER_SIZE * FILTER_SIZE).reshape(-1, 1)
+        k = np.repeat(np.arange(C), F * F).reshape(-1, 1)
 
         # for each image, take all tuples that correspond in the location (i.e., has the same location) in matrices i, j, k.
         # basically pick 1 item at a time according to the exact SAME location in each of the matrices i,j,k
         x_cols = x_padded[:, k, i, j]
-        C = x.shape[1]
 
         # affine transformation
-        out = np.dot(w.reshape(-1, FILTER_SIZE * FILTER_SIZE * C), x_cols) + b.reshape(-1, 1, 1)
+        out = np.dot(w.reshape(-1, F * F * C), x_cols) + b.reshape(-1, 1, 1)
 
         # rearrange to the agreed order: (examples, filters, height, width)
-        out = out.transpose(1, 0, 2).reshape(N, w.shape[0], out_height, out_width)
+        out = out.transpose(1, 0, 2).reshape(N, w.shape[0], H_new, W_new)
         out_act = np.maximum(out, 0)  # not the best practice but apply relu here
 
         #
@@ -223,10 +245,13 @@ class CNN:
         return out_act, x_cols
 
     #  forward part for convolution layer
-    def forward_pol_layer_fast(self, x):
+    def forward_pol_layer_fast(self, ex, layer_num):
+
+        x = ex.copy()
+        S = self.stride[layer_num]  # window size
 
         N, C, H, W = x.shape
-        x_reshaped = x.reshape(N, C, int(H / POL_WINDOW), POL_WINDOW, int(W / POL_WINDOW), POL_WINDOW)
+        x_reshaped = x.reshape(N, C, int(H / S), S, int(W / S), S)
         out = x_reshaped.max(axis=3).max(axis=4)
 
         return out, x_reshaped
@@ -260,20 +285,20 @@ class CNN:
             dL_da[layer] *= (self.mask[layer]).transpose()
 
         # conv/pol layers:
-        C = self.num_filters[-1]
+        C = self.conv_layers[-1]
         height = width = int(np.sqrt(dL_da[layer].shape[1] / C))
-        dL_da_conv = [0] * len(self.operation)
-        da = dL_da[layer].reshape(batch_size, C, height, width)
-        a = self.activations[0][1:].reshape(batch_size, C, height, width)
-        for layer_num in range(len(self.operation) - 1, -1, -1):
-            prev_act = self.activation_maps[layer_num]
+        # get delta per neuron in the final pooling layer
+        dout = dL_da[layer].reshape(batch_size, C, height, width)
+        # get the activation value in the final pooling layer
+        out = np.transpose(self.activations[0][1:]).reshape(batch_size, C, height, width)
+        for layer_num in range(len(self.conv_layers) - 1, -1, -1):
+            x = self.activation_maps[layer_num]
+            x_reshaped = self.input_as_matrix[layer_num]
             if self.operation[layer_num] == "conv":
-                xxx = 1
-                #pooling_delta = self.forward_conv_layer_fast(out, layer_num)
+                dout = self.backward_conv(x, out, dout, layer_num)
             if self.operation[layer_num] == "pol":
-                #dL_da_conv[layer_num] = self.backward_pool(prev_act, da)
-                prev_act_reshaped = self.input_as_matrix[layer_num]
-                dL_da_conv[layer_num] = self.backward_pool_fast(prev_act, prev_act_reshaped, da, a)
+                dout = self.backward_pool_fast(x, x_reshaped, dout, out)
+            out = x.copy()  # save activation of the input layer for next iteration
 
         # add regularization to gradient and average loss on batch
         for layer in range(len(self.layers) - 2, -1, -1):
@@ -292,9 +317,50 @@ class CNN:
                 # add regularization
                 self.grads[layer] += self.reg*dreg
 
-    def backward_pool(self, x, dL_da):
+    def backward_conv(self, x, out, dout, layer_num):
+
+        x_padded = x.copy()
+        dx_padded = np.zeros_like(x).astype(float)
+
+        N, _, H_orig, W_orig = x.shape
+        _, C, _, _ = out.shape
+        weights = self.filters[layer_num]  # parameters of current layer
+
+        S = self.stride[layer_num]
+        F = np.size(weights, 3)  # filter_size. All filters are square so it's enough to take one dimension
+
+        P = 0
+        # pad with 0's all around
+        while ((W_orig + 2*P)/S) % F != 0:
+            # pad the height and width dimensions only
+            x_padded = np.pad(x_padded, ((0, 0), (0, 0), (1, 1), (1, 1)), 'constant', constant_values=0)
+            dx_padded = np.pad(dx_padded, ((0, 0), (0, 0), (1, 1), (1, 1)), 'constant', constant_values=0)
+            P += 1  # width or height size
+
+        H_out = int((H_orig + 2*P - F)/S + 1)  # activation output height
+        W_out = int((W_orig + 2*P - F)/S + 1)  # activation output width
+
+        for n in range(N):
+            for c in range(C):
+                out_row = 0
+                for h in range(0, H_out, S):
+                    out_col = 0
+                    for w in range(0, W_out, S):
+                        in_vals = x_padded[n, :, h:h + F, w:w + F]
+                        out_val = out[n, c, out_row, out_col]
+                        dout_val = 1 if out_val > 0 else 0  # point derivative or ReLU activation
+                        delta = dout[n, c, out_row, out_col]  # error on output neuron
+                        self.filters_grads[layer_num][c, :, :, :] += in_vals * dout_val * delta
+                        self.biases_grads[layer_num][c] += dout_val * delta
+                        dx_padded[n, :, h:h + F, w:w + F] += weights[c, :, :, :] * delta
+                        out_col += 1
+                    out_row += 1
+        return dx_padded[:, :, P:-P, P:-P]
+
+    def backward_pool(self, x, dout, layer_num):
 
         N, C, H, W = x.shape
+        S = self.stride[layer_num]  # window size
 
         # create a matrix with the same shape as the convolution that preceded it for saving the gradients
         dx = np.zeros((N, C, H, W))
@@ -302,32 +368,32 @@ class CNN:
         for n in range(N):
             for c in range(C):
                 pol_row = 0
-                for row in range(0, H, POL_WINDOW):
+                for row in range(0, H, S):
                     pol_col = 0
-                    for col in range(0, W, POL_WINDOW):
+                    for col in range(0, W, S):
                         # previous activation map
-                        curr_patch = x[n, c, row:row + POL_WINDOW, col:col + POL_WINDOW]
+                        curr_patch = x[n, c, row:row + S, col:col + S]
                         # max location in each respective field
                         max_loc_idx = np.unravel_index(np.argmax(curr_patch, axis=None), curr_patch.shape)
                         # update value according to location
-                        delta = dL_da[n, c, pol_row, pol_col]
+                        delta = dout[n, c, pol_row, pol_col]
                         dx[n, c, max_loc_idx[0] + row, max_loc_idx[1] + col] = delta
                         pol_col += 1
                     pol_row += 1
 
         return dx
 
-
     def backward_pool_fast(self, x, x_reshaped, dout, out):
 
         dx_reshaped = np.zeros_like(x_reshaped)
-        out_newaxis = out[:, :, :, np.newaxis, :, np.newaxis]
-        mask = (x_reshaped == out_newaxis)
+        out_newaxis = out[:, :, :, np.newaxis, :, np.newaxis]  # add dimensions e.g., instead of 2,5,2,2 -> 2,5,2,1,2,1
+        mask = (x_reshaped == out_newaxis)  # mask indicating locations of the max value in the input image
         dout_newaxis = dout[:, :, :, np.newaxis, :, np.newaxis]
+        # make the dimensions in both arrays the same by duplicating values in each array
         dout_broadcast, _ = np.broadcast_arrays(dout_newaxis, dx_reshaped)
-        dx_reshaped[mask] = dout_broadcast[mask]
-        dx_reshaped /= np.sum(mask, axis=(3, 5), keepdims=True)
-        dx = dx_reshaped.reshape(x.shape)
+        dx_reshaped[mask] = dout_broadcast[mask]  # select locations of the max value
+        dx_reshaped /= np.sum(mask, axis=(3, 5), keepdims=True)  # in case there are several max values split the error evenly
+        dx = dx_reshaped.reshape(x.shape)  # reshape to the input shape
 
         return dx
 
