@@ -7,7 +7,6 @@ from time import gmtime, strftime
 
 # NN hyper-parameters
 nn_params = {}
-nn_params["model"] = "CNN"
 nn_params["optimizer"] = "SGD"  # learning rate decay factor
 nn_params["augmentation"] = False
 nn_params["lr"] = 0.01
@@ -25,6 +24,7 @@ nn_params["operation"] = ["conv", "pol"]  # type of operation on layer. Mandator
 nn_params["conv_num_layers"] = [3, 5]  # number of feature maps in each layer
 nn_params["stride"] = [1, 2]  # pool/conv stride
 nn_params["filter_size"] = [3]  # filter size. only on convolution layers
+nn_params["conv_activation"] = ["relu"]
 nn_params["layers"] = [20, 15, 10]  # FC dims - 1st dim is the flattening of the final conv/pol layers
 nn_params["activations"] = ['relu', 'softmax']  # FC activations on all but the 1st layer: tanh, relu or softmax
 nn_params["dropout"] = [0.0, 0.0]  # dropout on each layer

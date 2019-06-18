@@ -208,11 +208,6 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
             best_accu = val_acc
             was_best = True
 
-        # save weights norm
-        net_norm = model.weights_norm() if epoch == 1 else np.concatenate((net_norm, model.weights_norm()), axis=0)
-        if save_logs:
-            np.savetxt("./logs/" + exp + "/matrix_norms.txt", net_norm)
-
         # save best model
         if save_logs and was_best:
             file_name = "/best_model" if nn_params["model"] == "FC" else "/best_model_AE"
@@ -271,11 +266,11 @@ def test_model(model, nn_params, exp, X, Y, save_logs, dataset="val", best_accu=
 def classifier(nn_params, log, exp, train_path, val_path, test_path, save_logs):
 
     # create model and train it
-    model = Network.Fully_Connected(nn_params) if nn_params["model"] == "FC" else Network.CNN(nn_params)
+    model = Network.CNN(nn_params)
     if nn_params["load_model"] is not None:
         with open(nn_params["load_model"], 'rb') as pickle_file:
             model2 = pickle.load(pickle_file)
-        model.init_weights(model2.weights, model2.accum_grads, model2.sec_accum_grads)
+        model.init_weights(model2)
 
     model, mean, std = train_model(model, nn_params, log, exp, train_path, val_path, save_logs)
 
