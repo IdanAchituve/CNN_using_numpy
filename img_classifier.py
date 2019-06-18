@@ -14,16 +14,16 @@ img_size = 32
 
 def gradient_check(model, x, y):
 
-    grads = model.get_grads()
-    params = model.get_params()
+    grads, grads_filters, grads_biases = model.get_grads()
+    weights, filters, biases = model.get_params()
 
     eps = 0.00001
 
-    for layer in range(len(params)):
-        for src_neuron in range(np.size(params[layer], 0)):
-            for dst_neuron in range(np.size(params[layer], 1)):
+    for layer in range(len(weights)):
+        for src_neuron in range(np.size(weights[layer], 0)):
+            for dst_neuron in range(np.size(weights[layer], 1)):
 
-                param_val = params[layer][src_neuron, dst_neuron].copy()
+                param_val = weights[layer][src_neuron, dst_neuron].copy()
                 grad_val = grads[layer][src_neuron, dst_neuron].copy()
 
                 # compute (loss) function value of epsilon addition to one of the parameters
@@ -49,6 +49,40 @@ def gradient_check(model, x, y):
                 if reldiff > 1e-5:
                     print("Gradient check failed")
                     exit()
+
+    for layer in range(len(filters)):
+        for filter_out in range(np.size(filters[layer], 0)):
+            for filter_in in range(np.size(filters[layer], 1)):
+                for row in range(np.size(filters[layer], 2)):
+                    for col in range(np.size(filters[layer], 3)):
+
+                        param_val = filters[layer][filter_out, filter_in, row, col].copy()
+                        grad_val = grads_filters[layer][filter_out, filter_in, row, col].copy()
+
+                        # compute (loss) function value of epsilon addition to one of the parameters
+                        model.init_vals()
+                        model.set_param_conv(layer, filter_out, filter_in, row, col, param_val + eps)
+                        out = model.forward(x)
+                        upper_val = model.loss_function(y)
+
+                        # compute (loss) function value of epsilon reduction from one of the parameters
+                        model.init_vals()
+                        model.set_param_conv(layer, filter_out, filter_in, row, col, param_val - eps)  # multiply by 2 because the current value is w + epslion
+                        out = model.forward(x)
+                        lower_val = model.loss_function(y)
+
+                        # return to original state
+                        model.init_vals()
+                        model.set_param_conv(layer, filter_out, filter_in, row, col, param_val)
+
+                        numeric_grad = (upper_val - lower_val)/(2*eps)
+
+                        # Compare gradients
+                        reldiff = abs(numeric_grad - grad_val) / max(1, abs(numeric_grad), abs(grad_val))
+                        if reldiff > 1e-5:
+                            print("Gradient check failed")
+                            exit()
+
     print("Gradient check passed")
 
 
@@ -170,7 +204,7 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
             labels_vec = np.eye(NUM_CLASSES)[labels].transpose()
 
             # forward
-            batched_data = np.arange(96).reshape(2, 3, 4, 4)
+            #batched_data = np.arange(96).reshape(2, 3, 4, 4)
             out = model.forward(batched_data)
             loss = model.loss_function(labels_vec)
 
@@ -210,7 +244,7 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
 
         # save best model
         if save_logs and was_best:
-            file_name = "/best_model" if nn_params["model"] == "FC" else "/best_model_AE"
+            file_name = "/best_model" if nn_params["model"] == "CNN" else "/best_model_AE"
             with open("./logs/" + exp + file_name, 'wb') as best_model:
                 pickle.dump(model_to_save, best_model)
 
