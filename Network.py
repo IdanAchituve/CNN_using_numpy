@@ -127,6 +127,7 @@ class CNN:
                 pool_idx += 1
             self.input_as_matrix.append(in_matrix)  # for convolution save the matrix form and for pooling save special reshaped form
 
+        self.activation_maps.append(out.copy())
         # flatten last conv/pool layer and transpose so each column is an image in the batch
         out = out.reshape(batch_size, -1).transpose().copy()
         for layer_num in range(len(self.layers) - 1):
@@ -306,10 +307,10 @@ class CNN:
             dL_da[layer] *= (self.mask[layer]).transpose()
 
         # conv/pol layers:
-        C = self.conv_layers[-1]  # get number of filters in the last layer
-        height = width = int(np.sqrt(dL_da[layer].shape[1] / C))
+        out_as_mat = self.activation_maps[-1]
+        C, height, width = out_as_mat.shape[1], out_as_mat.shape[2], out_as_mat.shape[3]  # get number of filters in the last layer
         # get delta per neuron in the final pooling layer
-        dout = dL_da[layer].reshape(batch_size, C, height, width)
+        dout = dL_da[layer].reshape(out_as_mat.shape)
         # get the activation value in the final pooling layer
         out = np.transpose(self.activations[0][1:]).reshape(batch_size, C, height, width)
         conv_idx = len(self.conv_activation) - 1
@@ -348,7 +349,7 @@ class CNN:
                     dreg[dreg > 0] = 1.0
 
                 # add regularization
-                self.grads[layer] += self.reg*dreg
+                self.grads[layer] += self.reg * dreg
 
         # add regularization to gradient and average loss on batch in convolution layers. filter size is the filter of each
         # convolution layer so it's a good indication for the number of conv layers
