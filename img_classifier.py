@@ -210,6 +210,7 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
 
             # compute gradients and make the optimizer step
             model.backward(out, labels_vec)
+            #gradient_check(model, batched_data, labels_vec)
             model.step()
 
             cum_loss += loss  # sum losses on all examples

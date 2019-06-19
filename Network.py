@@ -353,7 +353,7 @@ class CNN:
 
         # add regularization to gradient and average loss on batch in convolution layers. filter size is the filter of each
         # convolution layer so it's a good indication for the number of conv layers
-        for layer in range(len(self.filter_size) - 1, -1, -1):
+        for layer in range(len(self.filters) - 1, -1, -1):
             # average gradients
             self.filters_grads[layer] = self.filters_grads[layer] / batch_size
             self.biases_grads[layer] = self.biases_grads[layer] / batch_size
@@ -473,7 +473,7 @@ class CNN:
                 reg_term = (1/2) * np.sum(self.weights[l] ** 2) if self.reg_type == "L2" else np.sum(np.abs(self.weights[l]))
                 sum_weights += reg_term
 
-            for l in range(len(self.filter_size)):
+            for l in range(len(self.filters)):
                 # L2 regularization proportional to the loss value
                 reg_term = (1/2) * np.sum(self.filters[l] ** 2) if self.reg_type == "L2" else np.sum(np.abs(self.filters[l]))
                 sum_weights += reg_term
@@ -502,7 +502,7 @@ class CNN:
                 self.weights[layer_num] = self.weights[layer_num] - self.momentum * prev_accum_grads + (1 + self.momentum) * self.accum_grads[layer_num]
 
         # update step for convolution layers
-        for layer_num in range(len(self.filter_size)):
+        for layer_num in range(len(self.filters)):
             # Nesterov gradient calculation
             if self.optimizer == "SGD":
                 # update weights
@@ -553,7 +553,7 @@ class CNN:
         for layer_num in range(len(self.layers) - 1):
             self.weights[layer_num] = model2.weights[layer_num].copy()
             self.accum_grads[layer_num] = model2.accum_grads[layer_num].copy()
-        for layer_num in range(len(self.filter_size)):
+        for layer_num in range(len(self.filters)):
             self.filters[layer_num] = model2.filters[layer_num].copy()
             self.filters_accum_grads[layer_num] = model2.filters_accum_grads[layer_num].copy()
             self.biases[layer_num] = model2.biases[layer_num].copy()
