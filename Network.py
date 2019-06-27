@@ -3,7 +3,7 @@ np.random.seed(222)
 
 # parameters for initialization
 INIT_MEAN = 0.0
-INIT_STD = 0.01
+INIT_STD = 0.1
 MIN_LR = 0.0001
 LR_SCALE = 2
 MAX_MOMENTUM = 0.9
@@ -351,8 +351,8 @@ class CNN:
                 # add regularization
                 self.grads[layer] += self.reg * dreg
 
-        # add regularization to gradient and average loss on batch in convolution layers. filter size is the filter of each
-        # convolution layer so it's a good indication for the number of conv layers
+        # add regularization to gradient and average loss on batch in convolution layers. filters are
+        # good indication for the number of conv layers
         for layer in range(len(self.filters) - 1, -1, -1):
             # average gradients
             self.filters_grads[layer] = self.filters_grads[layer] / batch_size
@@ -467,16 +467,15 @@ class CNN:
     # return the sum of losses per batch
     def loss_function(self, labels):
         sum_weights = 0.0
+
         if self.optimizer == "SGD":
             for l in range(len(self.layers) - 1):
                 # L2 regularization proportional to the loss value
-                reg_term = (1/2) * np.sum(self.weights[l] ** 2) if self.reg_type == "L2" else np.sum(np.abs(self.weights[l]))
-                sum_weights += reg_term
+                sum_weights += (1/2) * np.sum(self.weights[l] ** 2) if self.reg_type == "L2" else np.sum(np.abs(self.weights[l]))
 
             for l in range(len(self.filters)):
                 # L2 regularization proportional to the loss value
-                reg_term = (1/2) * np.sum(self.filters[l] ** 2) if self.reg_type == "L2" else np.sum(np.abs(self.filters[l]))
-                sum_weights += reg_term
+                sum_weights += (1/2) * np.sum(self.filters[l] ** 2) if self.reg_type == "L2" else np.sum(np.abs(self.filters[l]))
 
         # numerically stable log likelihood calculation
         label_exit = np.sum(self.logits * labels, axis=0)  # get the value at the true exit
@@ -558,3 +557,34 @@ class CNN:
             self.filters_accum_grads[layer_num] = model2.filters_accum_grads[layer_num].copy()
             self.biases[layer_num] = model2.biases[layer_num].copy()
             self.biases_accum_grads[layer_num] = model2.biases_accum_grads[layer_num].copy()
+
+    def FC_weights_norm(self):
+        # calc norm of each matrix and max eigenvalue
+        for layer_num in range(len(self.layers) - 1):
+            dot_product = np.dot(self.weights[layer_num], self.weights[layer_num].transpose())
+            norm = np.linalg.norm(dot_product)
+            max_eigenval = np.max(np.linalg.eig(dot_product)[0])
+            norm_eig = np.asarray([int(layer_num + 1), float(norm), max_eigenval.real]).reshape(1, -1)
+            net_norm = norm_eig.copy() if layer_num == 0 else np.concatenate((net_norm, norm_eig.copy()), axis=0)
+        net_norm = np.concatenate((net_norm, np.zeros(3).reshape(1, -1)))  # add delimiter between epochs
+        return net_norm
+
+    def FC_gradients_norm(self):
+        # calc norm of each matrix and max eigenvalue
+        for layer_num in range(len(self.layers) - 1):
+            dot_product = np.dot(self.grads[layer_num], self.grads[layer_num].transpose())
+            norm = np.linalg.norm(dot_product)
+            layer_norm = np.asarray([int(layer_num + 1), float(norm)]).reshape(1, -1)
+            net_norm = layer_norm.copy() if layer_num == 0 else np.concatenate((net_norm, layer_norm.copy()), axis=0)
+        net_norm = np.concatenate((net_norm, np.zeros(2).reshape(1, -1)))  # add delimiter between epochs
+        return net_norm
+
+    def conv_gradients_norm(self):
+        # calc norm of each matrix and max eigenvalue
+        for layer_num in range(len(self.filters)):
+            dot_product = np.dot(self.filters_grads[layer_num], self.filters_grads[layer_num].transpose())
+            norm = np.linalg.norm(dot_product)
+            layer_norm = np.asarray([int(layer_num + 1), float(norm)]).reshape(1, -1)
+            net_norm = layer_norm.copy() if layer_num == 0 else np.concatenate((net_norm, layer_norm.copy()), axis=0)
+        net_norm = np.concatenate((net_norm, np.zeros(2).reshape(1, -1)))  # add delimiter between epochs
+        return net_norm

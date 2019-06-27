@@ -103,11 +103,11 @@ def read_data(file, nn_params, dataset="train"):
     images = []
     with open(file) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
-        for row in csv_reader:
+        for idx, row in enumerate(csv_reader):
             if dataset == "train" or dataset == "validation":
                 labels.append(int(row[0]))
-            row_img = np.asarray([float(i) for i in row[1:]])
-            images.append(row_img)
+            row_img = np.asarray([float(i) for i in row[1:]]).reshape(1, img_channels, img_size, img_size)
+            images = row_img.copy() if idx == 0 else np.concatenate((images, row_img.copy()))
             if dataset == "train" and nn_params["augmentation"]:
                 img = row_img.reshape([img_channels, img_size, img_size])
                 # move the channel dimension to the last
@@ -119,24 +119,23 @@ def read_data(file, nn_params, dataset="train"):
                 flippedlr_img = np.rollaxis(flippedlr_img, 2, 0)
                 flippedlr_img = flippedlr_img.reshape(img_channels * img_size * img_size)
                 labels.append(int(row[0]))
-                images.append(flippedlr_img)
+                images = np.concatenate((images, flippedlr_img.copy()))
 
                 # flip up to down
                 flippedud_img = np.flipud(img)
                 flippedud_img = np.rollaxis(flippedud_img, 2, 0)
                 flippedud_img = flippedud_img.reshape(img_channels * img_size * img_size)
                 labels.append(int(row[0]))
-                images.append(flippedud_img)
+                images = np.concatenate((images, flippedud_img.copy()))
 
                 # rotate by 90 degrees
                 rot_img = np.transpose(img, (1, 0, 2))
                 rot_img = np.rollaxis(rot_img, 2, 0)
                 rot_img = rot_img.reshape(img_channels * img_size * img_size)
                 labels.append(int(row[0]))
-                images.append(rot_img)
+                images = np.concatenate((images, rot_img.copy()))
 
     labels = np.asarray(labels)
-    images = np.asarray(images).reshape(len(images), img_channels, img_size, img_size)
     return images, labels
 
 
@@ -191,12 +190,20 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
         correct = 0
 
         for ind in range(0, X_train.shape[0], batch_size):
+        #for ind in range(0, 2000, batch_size):
 
+            #if ind == 33:
+            #    xxx = 1
             # set the model to train mode, zero gradients and zero activations
             model.train_time()
             model.init_vals(True)
 
             # run the forward pass
+            #line = np.asarray([[0.1, 0.1, 0.1, 0.1], [1, 1, 1, 1], [0.1, 0.1, 0.1, 0.1], [0.1, 0.1, 0.1, 0.1]])[np.newaxis, np.newaxis, :]
+            #no_line = np.asarray([[0.1, 0.1, 0.1, 0.1], [0.1, 0.1, 0.1, 0.1], [0.1, 0.1, 0.1, 0.1], [0.1, 0.1, 0.1, 0.1]])[np.newaxis, np.newaxis,:]
+            #batched_data = np.concatenate((line, no_line))
+            #labels = np.asarray([1, 0])
+            #NUM_CLASSES = 2
             batched_data = X_train[ind:ind + batch_size].copy()
             labels = Y_train[ind:ind + batch_size].copy() - 1
 
@@ -217,6 +224,12 @@ def train_model(model, nn_params, log, exp, train_path, val_path, save_logs):
 
             pred = np.argmax(out, axis=0)
             correct += np.sum(labels == pred)
+
+            #print(pred)
+            #print(loss)
+            #print(model.filters[0])
+
+            #print(model.FC_gradients_norm())
 
         # decay learning rate
         if epoch % nn_params["lr_decay_epoch"] == 0:
